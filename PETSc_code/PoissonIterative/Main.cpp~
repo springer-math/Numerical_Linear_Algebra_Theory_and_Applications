@@ -1,0 +1,118 @@
+// The Main program which
+// solves  the Dirichlet problem for the Poisson's equation in 2D
+// using PETSc.
+
+static char help[] ="";
+#include <iostream>
+#include <petsc.h>
+#include <petscmat.h>
+#include <petscvec.h>
+#include <cmath>
+#include <time.h>
+#include "Poisson.h"
+
+const PetscInt n = 20;
+const PetscScalar h = 1 / (PetscScalar)(n + 1);
+
+const bool VERBOSE = true;
+
+using namespace std;
+
+char METHOD_NAMES[8][50] = {
+    "invalid method",
+    "Jacobi's method",
+    "Gauss-Seidel method",
+    "Successive Overrelaxation method (SOR)",
+    "Conjugate Gradient method",
+    "Conjugate Gradient method (Algorithm 12.13)",
+    "Preconditioned Conjugate Gradient method",
+    "Preconditioned Conjugate Gradient method (Algorithm 12.14)"
+};
+
+char *GetMethodName(PetscInt method) {
+    if (method < 0 || method > 7)
+        return METHOD_NAMES[0];
+    else
+        return METHOD_NAMES[method];
+}
+
+int main(int argc, char **argv) {
+  PetscErrorCode ierr;
+  ierr = PetscInitialize(&argc, &argv,(char *)0, help);CHKERRQ(ierr);
+  
+  PetscInt method =  atoi(argv[1]);
+  PetscBool methodSet = PETSC_FALSE;
+  Mat S;
+  Vec h2b, u;
+ 
+
+	ierr = PetscOptionsGetInt(NULL, NULL, "-m", &method, &methodSet);
+    if (method < 1 || method > 7) {
+        cout << "Invalid number of the selected method: "
+	     << method << ".\nExiting..." << endl;
+        exit(-1);
+    }
+
+    // To use SOR with omega != 1, we need to disable inodes
+    if (method == METHOD_SOR)
+        PetscOptionsSetValue(NULL, "-mat_no_inode", NULL);
+
+    ierr = CreateMatrix(&S, n*n, n*n); CHKERRQ(ierr);     
+    ierr = CreateVector(&h2b, n*n); CHKERRQ(ierr);
+    ierr = CreateVector(&u, n*n); CHKERRQ(ierr);
+
+    // create discrete Laplacian
+    ierr = DiscretePoisson2D(n, &S);
+
+    // create right hand side
+    ierr = DiscretePoisson2D_coeffs(n, h, &h2b);
+
+    ierr = MatAssemblyBegin(S, MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
+    ierr = MatAssemblyEnd(S, MAT_FINAL_ASSEMBLY); CHKERRQ(ierr);
+    ierr = VecAssemblyBegin(h2b); CHKERRQ(ierr);
+    ierr = VecAssemblyEnd(h2b); CHKERRQ(ierr);
+    ierr = VecAssemblyBegin(u); CHKERRQ(ierr);
+    ierr = VecAssemblyEnd(u); CHKERRQ(ierr);
+
+    /*
+      Below we solve system  S*u= h2b
+     */
+    if (VERBOSE)
+        PetscPrintf(PETSC_COMM_WORLD, "Using %s\n", GetMethodName(method));
+
+    if (method == METHOD_CG_FULL)
+        ConjugateGradient_full(S, h2b, u, VERBOSE);
+    else if (method == METHOD_PCG_FULL)
+        PreconditionedConjugateGradient_full(S, h2b, u, VERBOSE);
+    else
+        Solve(S, h2b, u, method, VERBOSE);
+    
+    // Print out  solution 
+ FILE* resultfile = fopen("solution.m", "w");
+ 
+    if (VERBOSE) {
+      PetscInt i, j, matsize, *idx = new PetscInt[n*n];
+      PetscScalar *vecu = new PetscScalar[n*n];
+      matsize = n*n;
+      
+      for (i = 0; i <  matsize; i++)
+	idx[i] = i;
+      
+      ierr = VecGetValues(u, matsize, idx, vecu);
+      
+      for (i = 0; i < n; i++) {
+	for (j = 0; j < n; j++) {
+	  PetscPrintf(PETSC_COMM_WORLD, "%.12e ", vecu[n*i + j]);
+	  fprintf(resultfile, "%.12e ", vecu[n*i + j]);
+	}
+	PetscPrintf(PETSC_COMM_WORLD, "\n");
+	fprintf(resultfile, "\n");
+      }
+      
+      delete [] vecu;
+      delete [] idx;
+    }
+    fclose(resultfile);
+    ierr = PetscFinalize(); CHKERRQ(ierr);
+    return 0;
+}
